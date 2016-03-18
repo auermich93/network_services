@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily network scan
+[Timer]
+OnCalendar=daily
+Persistent=true
+[Install]
+WantedBy=multi-user.target

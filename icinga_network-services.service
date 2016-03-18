@@ -1,0 +1,6 @@
+[Unit]
+Description=Network scanner
+[Service]
+Type=oneshot
+ExecStart=/etc/icingaweb2/modules/network-services/scanner
+SuccessExitStatus=1

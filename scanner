@@ -1,0 +1,106 @@
+#!/bin/bash
+
+# -----------------------------------------------------------------------
+#
+#	Copyright (C) 2016 Jürgen Hecht
+#	
+#	This program is free software: you can redistribute it and/or modify
+#	it under the terms of the GNU General Public License as published by
+#	the Free Software Foundation, either version 3 of the License, or
+#	(at your option) any later version.
+#	
+#	This program is distributed in the hope that it will be useful,
+#	but WITHOUT ANY WARRANTY; without even the implied warranty of
+#	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#	GNU General Public License for more details.
+#	
+#	You should have received a copy of the GNU General Public License
+#	along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# -----------------------------------------------------------------------
+
+
+# CONSTANTS AND VARIABLES
+
+# First of all run this script manually!
+# After you created a new SSH identity file and approved machines' ssh host keys, set from "0" to "1".
+readonly SUCCESSFUL_SETUP="1"
+
+# set constants
+readonly IP_ADDRESS_RANGE="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+readonly SSH_USERNAME="icinga"
+readonly SSH_MANAGEMENT_KEY="/etc/icingaweb2/modules/network-services/id_ed25519"
+readonly SSH_MACHINES_FILE="/etc/icingaweb2/modules/network-services/ssh-machines.txt"
+readonly HTML_REPORT_FILE = "/etc/icingaweb2/modules/network-services/report.html"
+readonly XML_REPORT_FILE = "/etc/icingaweb2/modules/network-services/report.xml"
+readonly ICINGA_HOSTS_PATH="/etc/icinga2/conf.d/hosts/"
+readonly MACHINE_UNITS_FILE="units.txt"
+
+# set text
+readonly START_SCAN="Start nmap scan for machines with an open SSH port ..."
+readonly END_SCAN="Found SSH machines:"
+readonly START_SSH="Start to connect to SSH servers:"
+readonly START_CONNECT="Connect to:"
+readonly HOST_EXIST="There already is a config file for this host."
+
+
+if [ "$SUCCESSFUL_SETUP" != "1" ]
+	then
+		# CREATE SSH IDENTITY FILE (ICINGA MANAGEMENT KEY)
+		echo -e 'y\n' | ssh-keygen -t ed25519 -f "$SSH_MANAGEMENT_KEY" -P ""
+fi
+
+
+# NMAP SCAN
+echo $START_SCAN
+nmap -p22 -Pn -oG - "$IP_ADDRESS_RANGE" | awk '/open/{print $2}' > "$SSH_MACHINES_FILE"
+echo $END_SCAN
+cat $SSH_MACHINES_FILE
+
+
+# CONNECT TO SSH
+echo $START_SSH
+while read server; do
+
+	# Create Host config file
+	[[ -f "$ICINGA_HOSTS_PATH""$server".conf ]] && echo "$HOST_EXIST" || echo 'object Host \""$server"\" {
+	import \"generic-host\"
+	address = \""$server"\"
+	vars.os = \"Linux OS\"
+	vars.sla = \"24x7\"
+}' > "$ICINGA_HOSTS_PATH""$server".conf
+	
+	mkdir "$ICINGA_HOSTS_PATH""$server" -p
+
+	if [ "$SUCCESSFUL_SETUP" != "1" ]
+		then
+			# Copying the public Icinga management key to the remote server
+			ssh-copy-id -i "$SSH_MANAGEMENT_KEY".pub "$SSH_USERNAME"@"$server"
+	fi
+
+	echo $START_CONNECT "$SSH_USERNAME"@"$server"
+	ssh "$SSH_USERNAME"@"$server" -i "$SSH_MANAGEMENT_KEY" -tt 'systemctl list-unit-files | grep enabled | awk '"'"'{print $1}'"'"'' > "$ICINGA_HOSTS_PATH""$server"/"$MACHINE_UNITS_FILE"
+
+		while read unit; do
+
+			echo $unit
+			# Create Service config file
+			[[ -f "$ICINGA_HOSTS_PATH""$server"/"$unit".conf ]] && echo "$HOST_EXIST" || echo 'object Service \""$unit"\" {
+	import \"generic-service\"
+	host_name = \""$server"\"
+	check_command = "by_ssh"
+	vars.by_ssh_command = \"systemctl is-active "$unit"\"
+	vars.by_ssh_logname = \""$SSH_USERNAME"\"
+	vars.by_ssh_identity = \""$SSH_MANAGEMENT_KEY"\"
+	vars.by_ssh_crit = "inactive"
+	vars.sla = "24x7"
+}' > "$ICINGA_HOSTS_PATH""$server"/"$unit".conf
+			
+		done < "$ICINGA_HOSTS_PATH""$server"/"$MACHINE_UNITS_FILE"
+
+done < $SSH_MACHINES_FILE
+
+
+## GUI BACKGROUND SCAN
+# nmap -p22 -Pn -oX - "$IP_ADDRESS_RANGE"  > "$XML_REPORT_FILE"
+# xsltproc "$XML_REPORT_FILE" -o "$HTML_REPORT_FILE"

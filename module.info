@@ -1,0 +1,4 @@
+Module: network-services
+Version: 0.1
+Description: Network Services module
+ This is a simple Icinga Web 2 module for Nmap resultat.
